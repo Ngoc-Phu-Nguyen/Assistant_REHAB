@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tra cứu hồ sơ bệnh nhân</title>
+  <style>
+    :root {
+      --bg: #0f172a; /* slate-900 */
+      --card: #111827; /* gray-900 */
+      --muted: #94a3b8; /* slate-400 */
+      --text: #e5e7eb; /* gray-200 */
+      --primary: #22c55e; /* green-500 */
+      --border: #1f2937; /* gray-800 */
+      --danger: #ef4444; /* red-500 */
+    }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji";
+      background: radial-gradient(1200px 600px at 70% -10%, #1e293b 0%, var(--bg) 30%);
+      color: var(--text);
+      display: grid; place-items: center;
+    }
+    .card {
+      width: min(680px, 92vw);
+      background: linear-gradient(180deg, #0b1220, #0b1220) padding-box,
+                  linear-gradient(145deg, rgba(255,255,255,.08), rgba(255,255,255,0)) border-box;
+      border: 1px solid transparent;
+      border-radius: 18px;
+      padding: 28px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    h1 { margin: 0 0 16px; font-size: 24px; font-weight: 700; letter-spacing: .2px; }
+    p.desc { margin: 0 0 22px; color: var(--muted); }
+
+    .row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; }
+    input[type="text"] {
+      width: 100%;
+      background: #0b1020;
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 14px 16px;
+      outline: none;
+      font-size: 16px;
+      transition: border .2s, box-shadow .2s;
+    }
+    input[type="text"]:focus {
+      border-color: #334155; /* slate-700 */
+      box-shadow: 0 0 0 4px rgba(51,65,85,.35);
+    }
+    button {
+      appearance: none; border: 0; cursor: pointer; user-select: none;
+      background: linear-gradient(180deg, #22c55e, #16a34a);
+      color: black; font-weight: 700; letter-spacing: .2px;
+      padding: 12px 18px; border-radius: 12px; font-size: 15px;
+      box-shadow: 0 8px 18px rgba(34,197,94,.25);
+      transition: transform .06s ease, filter .2s ease, opacity .2s;
+    }
+    button:hover { filter: brightness(1.05); }
+    button:active { transform: translateY(1px); }
+    button[disabled] { opacity: .5; cursor: not-allowed; }
+
+    .result, .error, .note { margin-top: 18px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--border); }
+    .result { background: rgba(34,197,94,.08); border-color: rgba(34,197,94,.25); }
+    .error { background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.25); color: #fecaca; }
+    .note { background: rgba(148,163,184,.08); }
+    .result a { color: #86efac; font-weight: 700; text-decoration: none; }
+
+    .mini { font-size: 12px; color: var(--muted); margin-top: 8px; display: block; }
+    .tools { display: flex; gap: 8px; margin-top: 10px; }
+    .ghost { background: #0b1020; color: var(--text); border: 1px solid var(--border); box-shadow: none; }
+    .ghost:hover { filter: none; border-color: #334155; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #93c5fd; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    footer { position: fixed; inset-inline: 0; bottom: 10px; color: var(--muted); text-align: center; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main class="card" role="main" aria-labelledby="title">
+    <h1 id="title">Tra cứu kết quả bệnh nhân</h1>
+    <p class="desc">Nhập <strong>ID patient</strong>, bấm <strong>Tra cứu</strong>. Ví dụ: 19851205_KhangBachCuong.</p>
+
+    <div class="row">
+      <input id="patientId" type="text" placeholder="VD: 123456" autocomplete="off" inputmode="numeric" aria-label="ID patient" />
+      <button id="lookupBtn" disabled>Tra cứu</button>
+    </div>
+
+    <div id="statusArea"></div>
+
+  </main>
+  <footer>© Demo UI – Single HTML file</footer>
+
+  <script>
+    // ================== CONFIG ==================
+    // CHỈNH SỬA DÒNG DƯỚI CHO PHÙ HỢP BACKEND CỦA BẠN
+    const API_BASE = "https://literate-jay-obviously.ngrok-free.app"; // ví dụ FastAPI local
+    const LOOKUP_PATH = "/lookup";           // POST
+    const TASKS_PATH = "/tasks/";            // GET /tasks/{task_id}
+
+    // ================ HELPERS ==================
+    const $ = (sel) => document.querySelector(sel);
+    const statusArea = $('#statusArea');
+    const input = $('#patientId');
+    const btn = $('#lookupBtn');
+
+    input.addEventListener('input', () => {
+      btn.disabled = !input.value.trim();
+    });
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !btn.disabled) {
+        e.preventDefault();
+        lookup();
+      }
+    });
+
+    btn.addEventListener('click', lookup);
+
+    function setStatus(el) {
+      statusArea.innerHTML = '';
+      statusArea.appendChild(el);
+    }
+
+    function makeBlock(className, html) {
+      const div = document.createElement('div');
+      div.className = className;
+      div.innerHTML = html;
+      return div;
+    }
+
+    function showLoading(text = 'Đang tra cứu...') {
+      const div = makeBlock('note', `<span class="spinner"></span> ${text}`);
+      setStatus(div);
+    }
+
+    function showError(msg) {
+      const div = makeBlock('error', msg);
+      setStatus(div);
+    }
+
+function showResult(resultUrl, summaryUrl, shortUrl, summaryShortUrl) {
+  const container = document.createElement('div');
+
+  // Chọn link dùng cho QR (ưu tiên short)
+  const qrTarget = shortUrl || resultUrl;
+
+  // Khối kết quả chính
+  const mainHtml = `
+    <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap;">
+      <div style="flex:1 1 280px; min-width:260px;">
+        Kết quả gốc: 
+        <div class="tools" style="margin-top:8px;">
+          <button class="ghost" id="copyBtn">Sao chép liên kết</button>
+          <button class="ghost" id="openBtn">Mở kết quả</button>
+        </div>
+      </div>
+      <div style="flex:0 0 auto; text-align:center;">
+        <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">QR – Kết quả</div>
+        <div id="qrRes"></div>
+      </div>
+    </div>
+  `;
+  const mainDiv = makeBlock('result', mainHtml);
+  container.appendChild(mainDiv);
+
+  // Khối summary (nếu có)
+  let qrSumNode = null;
+  if (summaryUrl) {
+    const sumHtml = `
+      <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap; margin-top:8px;">
+        <div style="flex:1 1 280px; min-width:260px;">
+          Kết quả tóm tắt từ AI: 
+              <div class="tools" style="margin-top:8px;">
+            <button class="ghost" id="copySumBtn">Sao chép liên kết</button>
+            <button class="ghost" id="openSumBtn">Mở bản tóm tắt</button>
+          </div>
+        </div>
+        <div style="flex:0 0 auto; text-align:center;">
+          <div style="font-size:12px; color:#94a3b8; margin-bottom:6px;">QR – Summary</div>
+          <div id="qrSum"></div>
+        </div>
+      </div>
+    `;
+    const sumDiv = makeBlock('result', sumHtml);
+    container.appendChild(sumDiv);
+  }
+
+  setStatus(container);
+
+ // Vẽ QR (ưu tiên short_url -> QR ngắn, quét dễ)
+  const qrResNode = document.getElementById('qrRes');
+  if (qrResNode && typeof QRCode !== 'undefined') {
+    qrResNode.innerHTML = '';
+    new QRCode(qrResNode, {
+      text: qrTarget,
+      width: 140,
+      height: 140,
+      colorDark: "#22c55e",
+      colorLight: "#0f172a",
+      correctLevel: QRCode.CorrectLevel.H
+    });
+  }
+
+  if (summaryUrl) {
+    const targetSum = summaryShortUrl || summaryUrl;
+    qrSumNode = document.getElementById('qrSum');
+    if (qrSumNode && typeof QRCode !== 'undefined') {
+      qrSumNode.innerHTML = '';
+      new QRCode(qrSumNode, {
+        text: targetSum,
+        width: 140,
+        height: 140,
+        colorDark: "#22c55e",
+        colorLight: "#0f172a",
+        correctLevel: QRCode.CorrectLevel.H
+      });
+    }
+  }
+
+
+  // ===== Buttons =====
+  $('#copyBtn')?.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(resultUrl); toast('Đã sao chép link'); }
+    catch { toast('Không sao chép được'); }
+  });
+  $('#openBtn')?.addEventListener('click', () => window.open(resultUrl, '_blank'));
+
+  if (shortUrl) {
+    $('#copyShortBtn')?.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(shortUrl); toast('Đã sao chép link rút gọn'); }
+      catch { toast('Không sao chép được'); }
+    });
+  }
+
+  if (summaryUrl) {
+    $('#copySumBtn')?.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(summaryUrl); toast('Đã sao chép link summary'); }
+      catch { toast('Không sao chép được'); }
+    });
+    $('#openSumBtn')?.addEventListener('click', () => window.open(summaryUrl, '_blank'));
+
+    if (summaryShortUrl) {
+      $('#copySumShortBtn')?.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(summaryShortUrl); toast('Đã sao chép link rút gọn (summary)'); }
+        catch { toast('Không sao chép được'); }
+      });
+    }
+  }
+}
+
+    function toast(message) {
+      const t = document.createElement('div');
+      t.textContent = message;
+      t.style.position = 'fixed';
+      t.style.bottom = '24px';
+      t.style.left = '50%';
+      t.style.transform = 'translateX(-50%)';
+      t.style.background = '#111827';
+      t.style.border = '1px solid #334155';
+      t.style.padding = '10px 14px';
+      t.style.borderRadius = '10px';
+      t.style.color = '#e5e7eb';
+      t.style.boxShadow = '0 10px 30px rgba(0,0,0,.35)';
+      document.body.appendChild(t);
+      setTimeout(() => t.remove(), 1600);
+    }
+
+    async function lookup() {
+      const id = input.value.trim();
+      if (!id) return;
+      btn.disabled = true;
+      showLoading('Đang tra cứu… Vui lòng đợi');
+
+      try {
+        const r = await fetch(API_BASE + LOOKUP_PATH, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id })
+        });
+
+        if (!r.ok) {
+          if (r.status === 404) {
+            showError("ID không khả dụng. Vui lòng kiểm tra lại.");
+          } else {
+            showError("Lỗi gọi API: HTTP " + r.status);
+          }
+          return;
+        }
+        const data = await r.json();
+
+        if (data.result_url) {
+           showResult(data.result_url, data.summary_url, data.short_url, data.summary_short_url);
+        } else if (data.task_id) {
+          // Long running task: start polling
+          await pollTask(data.task_id);
+        } else {
+          showError('Phản hồi không hợp lệ từ máy chủ.');
+        }
+      } catch (err) {
+        showError('Error: ' + (err?.message || err));
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function pollTask(taskId, { intervalMs = 2000, timeoutMs = 120000 } = {}) {
+      const started = Date.now();
+      let attempt = 0;
+      while (Date.now() - started < timeoutMs) {
+        attempt++;
+        showLoading(`Đang xử lý (lần ${attempt})…`);
+        try {
+          const r = await fetch(API_BASE + TASKS_PATH + encodeURIComponent(taskId));
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const data = await r.json();
+          if (data.status === 'done' && data.result_url) {
+           showResult(data.result_url, data.summary_url, data.short_url, data.summary_short_url);
+            return;
+          }
+          if (data.status === 'failed') {
+            showError(data.error || 'Tác vụ thất bại.');
+            return;
+          }
+          // else still processing
+          await new Promise(res => setTimeout(res, intervalMs));
+        } catch (e) {
+          showError('Lỗi khi kiểm tra tiến trình: ' + (e?.message || e));
+          return;
+        }
+      }
+      showError('Quá thời gian chờ. Vui lòng thử lại sau.');
+    }
+  </script>
+</body>
+</html>
